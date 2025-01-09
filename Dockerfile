@@ -329,34 +329,14 @@ rmdir "$coverdir/helpers"
 exit $ecode
 EOF
 
-# dlv builds delve for debug variant images
-FROM gobuild-base AS dlv
-ARG DELVE_VERSION
-ARG TARGETPLATFORM
-RUN --mount=target=/root/.cache,type=cache\
-    --mount=target=/go/pkg/mod,type=cache <<EOT
-  set -ex
-  mkdir /out
-  if [ "$(xx-info os)" = "freebsd" ]; then
-    echo "WARN: dlv requires cgo enabled on FreeBSD, skipping: https://github.com/moby/buildkit/pull/5497#issuecomment-2462031339"
-    exit 0
-  fi
-  xx-go install "github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}"
-  if ! xx-info is-cross; then
-    /go/bin/dlv version
-    mv /go/bin/dlv /out
-  else
-    mv /go/bin/*/dlv* /out
-  fi
-EOT
-
 FROM buildkit-export AS buildkit-linux
 COPY --link --from=binaries / /usr/bin/
 ENV BUILDKIT_SETUP_CGROUPV2_ROOT=1
 ENTRYPOINT ["buildkitd"]
 
+FROM --platform=$BUILDPLATFORM laurentgoderre689/delve:${DELVE_VERSION} AS dlv
 FROM buildkit-linux AS buildkit-linux-debug
-COPY --link --from=dlv /usr/bin/dlv /usr/bin/dlv
+COPY --link --from=dlv /dlv /usr/bin/dlv
 COPY --link --chmod=755 <<EOF /docker-entrypoint.sh
 #!/bin/sh
 exec dlv exec /usr/bin/buildkitd \\
@@ -379,10 +359,10 @@ FROM binaries AS buildkit-windows
 
 FROM scratch AS binaries-for-test
 COPY --link --from=gotestsum /out /
-COPY --link --from=dlv /out /
 COPY --link --from=registry /out /
 COPY --link --from=containerd /out /
 COPY --link --from=binaries / /
+COPY --link --from=dlv / /
 
 FROM buildkit-base AS integration-tests-base
 ENV BUILDKIT_INTEGRATION_ROOTLESS_IDPAIR="1000:1000"
@@ -424,6 +404,7 @@ COPY --link --from=cni-plugins /opt/cni/bin/bridge /opt/cni/bin/host-local /opt/
 COPY --link hack/fixtures/cni.json /etc/buildkit/cni.json
 COPY --link hack/fixtures/dns-cni.conflist /etc/buildkit/dns-cni.conflist
 COPY --link --from=binaries / /usr/bin/
+COPY --link --from=dlv /dlv /usr/bin/dlv
 
 # integration-tests prepares an image suitable for running all tests
 FROM integration-tests-base AS integration-tests
